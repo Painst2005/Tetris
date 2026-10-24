@@ -105,24 +105,58 @@ public sealed class TetrisGameTests
     }
 
     [Fact]
-    public void ClearingTenLines_LevelsUpAndSpeedsUp()
+    public void ClearingLineAtLevelThreshold_LevelsUpAndSpeedsUp()
     {
+        // 一次落子最多消 4 行，所以用「已消 9 行」的状态验证第 10 行的升级阈值，
+        // 而不是靠预填 10 行满行让单次落子消 10 行（现实中不会发生）。
         TetrominoType?[,] board = EmptyBoard();
+        FillRow(board, 15, fromColumn: 4);
 
-        for (int row = 6; row <= 15; row++)
-        {
-            FillRow(board, row);
-        }
-
-        TetrisGame game = CreateGame(board, TetrominoType.I, currentX: 4, currentY: 0);
+        TetrisGame game = CreateGame(board, TetrominoType.I, currentX: 0, currentY: 14, lines: 9);
         int initialInterval = game.DropIntervalMs;
 
         game.HardDrop();
 
-        Assert.Equal(1000, game.Score);
+        Assert.Equal(100, game.Score);
         Assert.Equal(10, game.Lines);
         Assert.Equal(2, game.Level);
         Assert.True(game.DropIntervalMs < initialInterval);
+    }
+
+    [Fact]
+    public void RotatingFourTimes_RestoresOriginalShape()
+    {
+        foreach (TetrominoType type in new[]
+                 {
+                     TetrominoType.I, TetrominoType.J, TetrominoType.L,
+                     TetrominoType.O, TetrominoType.S, TetrominoType.T, TetrominoType.Z
+                 })
+        {
+            Tetromino original = Tetromino.Create(type);
+            Tetromino rotated = original;
+
+            for (int i = 0; i < 4; i++)
+            {
+                rotated = rotated.RotateClockwise();
+            }
+
+            AssertSameCells(original, rotated);
+        }
+    }
+
+    [Fact]
+    public void RotatingAtBothWalls_KeepsPieceInsideBoard()
+    {
+        foreach (int startX in new[] { 0, TetrisGame.Columns - 4 })
+        {
+            TetrisGame game = CreateGame(current: TetrominoType.I, currentX: startX, currentY: 4);
+
+            for (int i = 0; i < 4; i++)
+            {
+                game.RotateClockwise();
+                AssertPieceInsideBoard(game);
+            }
+        }
     }
 
     [Fact]
@@ -262,5 +296,40 @@ public sealed class TetrisGameTests
         }
 
         return count;
+    }
+
+    private static void AssertSameCells(Tetromino expected, Tetromino actual)
+    {
+        Assert.Equal(expected.Size, actual.Size);
+
+        for (int row = 0; row < expected.Size; row++)
+        {
+            for (int column = 0; column < expected.Size; column++)
+            {
+                Assert.Equal(expected.Cells[row, column], actual.Cells[row, column]);
+            }
+        }
+    }
+
+    private static void AssertPieceInsideBoard(TetrisGame game)
+    {
+        Tetromino piece = game.Current;
+
+        for (int row = 0; row < piece.Size; row++)
+        {
+            for (int column = 0; column < piece.Size; column++)
+            {
+                if (piece.Cells[row, column] == 0)
+                {
+                    continue;
+                }
+
+                int x = game.CurrentX + column;
+                int y = game.CurrentY + row;
+
+                Assert.InRange(x, 0, TetrisGame.Columns - 1);
+                Assert.InRange(y, 0, TetrisGame.Rows - 1);
+            }
+        }
     }
 }
