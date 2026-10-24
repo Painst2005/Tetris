@@ -31,6 +31,8 @@ dotnet run --project Tetris.csproj -c Release
 
 ## 单元测试
 
+当前共 **19 个**测试：13 个覆盖棋盘碰撞、旋转、消行、计分、状态克隆，6 个覆盖存档往返、损坏隔离与文件占用降级。
+
 ```bash
 dotnet test Tetris.Tests/Tetris.Tests.csproj
 ```
