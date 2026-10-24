@@ -176,7 +176,7 @@ public sealed class HighScoreStore : IHighScoreStore
                 error = ex.Message;
                 return false;
             }
-            catch (IOException ex) when (attempt < MaxRetries - 1)
+            catch (IOException) when (attempt < MaxRetries - 1)
             {
                 // 文件被短暂占用：稍后重试。
                 Thread.Sleep(RetryDelayMs);
