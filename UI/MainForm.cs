@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Drawing.Drawing2D;
 using System.Drawing.Text;
 using Tetris.Game;
+using Tetris.Persistence;
 
 namespace Tetris.UI;
 
@@ -25,8 +26,10 @@ public sealed class MainForm : Form
     private static readonly SolidBrush MutedBrush = new(Color.FromArgb(93, 107, 138));
     private static readonly SolidBrush KeyBrush = new(Color.FromArgb(125, 211, 252));
     private static readonly SolidBrush DescBrush = new(Color.FromArgb(154, 167, 199));
+    private static readonly SolidBrush RecordBrush = new(Color.FromArgb(251, 191, 36));
 
     private readonly TetrisGame _game = new();
+    private readonly HighScoreStore _highScoreStore = new();
     private readonly System.Windows.Forms.Timer _timer;
     private readonly Stopwatch _clock = Stopwatch.StartNew();
     private readonly HashSet<Keys> _pressed = new();
@@ -37,6 +40,7 @@ public sealed class MainForm : Form
     private readonly Font _scoreFont = PixelFont("Consolas", 32f, FontStyle.Bold);
     private readonly Font _statFont = PixelFont("Consolas", 29f, FontStyle.Bold);
     private readonly Font _keyFont = PixelFont("Consolas", 12f, FontStyle.Bold);
+    private readonly Font _recordFont = PixelFont("Segoe UI", 11f, FontStyle.Bold);
     private readonly Font _overlayTitleFont = PixelFont("Segoe UI", 33f, FontStyle.Bold);
     private readonly Font _overlayBodyFont = PixelFont("Segoe UI", 14f);
 
@@ -81,6 +85,7 @@ public sealed class MainForm : Form
             _scoreFont.Dispose();
             _statFont.Dispose();
             _keyFont.Dispose();
+            _recordFont.Dispose();
             _overlayTitleFont.Dispose();
             _overlayBodyFont.Dispose();
         }
@@ -103,6 +108,12 @@ public sealed class MainForm : Form
     {
         base.OnDeactivate(e);
         _pressed.Clear();
+    }
+
+    protected override void OnFormClosing(FormClosingEventArgs e)
+    {
+        _highScoreStore.Submit(_game.Score);
+        base.OnFormClosing(e);
     }
 
     protected override void OnKeyDown(KeyEventArgs e)
@@ -204,6 +215,7 @@ public sealed class MainForm : Form
             }
         }
 
+        _highScoreStore.Submit(_game.Score);
         Invalidate();
     }
 
@@ -460,6 +472,15 @@ public sealed class MainForm : Form
         var card = new RectangleF(SideX, 252, 220, 76);
         DrawCard(g, card, Color.FromArgb(46, 34, 211, 238));
         g.DrawString("分数 · 十六进制", _labelFont, LabelBrush, SideX + 16f, 264f);
+
+        using var rightAligned = new StringFormat { Alignment = StringAlignment.Far };
+        g.DrawString(
+            $"最高 0x{_highScoreStore.HighScore:X4}",
+            _recordFont,
+            RecordBrush,
+            new RectangleF(SideX + 14f, 264f, 192f, 16f),
+            rightAligned);
+
         g.DrawString($"0x{_game.Score:X4}", _scoreFont, ScoreBrush, SideX + 14f, 282f);
     }
 
