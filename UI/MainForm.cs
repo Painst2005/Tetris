@@ -29,7 +29,7 @@ public sealed class MainForm : Form
     private static readonly SolidBrush RecordBrush = new(Color.FromArgb(251, 191, 36));
 
     private readonly TetrisGame _game = new();
-    private readonly HighScoreStore _highScoreStore = new();
+    private readonly IHighScoreStore _highScoreStore = new HighScoreStore();
     private readonly System.Windows.Forms.Timer _timer;
     private readonly Stopwatch _clock = Stopwatch.StartNew();
     private readonly HashSet<Keys> _pressed = new();
@@ -44,18 +44,21 @@ public sealed class MainForm : Form
     private readonly Font _overlayTitleFont = PixelFont("Segoe UI", 33f, FontStyle.Bold);
     private readonly Font _overlayBodyFont = PixelFont("Segoe UI", 14f);
 
-    private float _scale = 1f;
     private long _lastTick;
     private long _nextLeftRepeat;
     private long _nextRightRepeat;
     private long _nextDownRepeat;
+    private GameState _lastState = GameState.Running;
+    private string? _notice;
+    private long _noticeUntil;
 
     public MainForm()
     {
         Text = "Tetris · 俄罗斯方块";
-        ClientSize = new Size(700, 660);
-        FormBorderStyle = FormBorderStyle.FixedSingle;
-        MaximizeBox = false;
+        ClientSize = new Size(DesignWidth, DesignHeight);
+        MinimumSize = new Size(480, 460);
+        FormBorderStyle = FormBorderStyle.Sizable;
+        MaximizeBox = true;
         StartPosition = FormStartPosition.CenterScreen;
         BackColor = Color.FromArgb(5, 8, 16);
         DoubleBuffered = true;
@@ -97,10 +100,16 @@ public sealed class MainForm : Form
     {
         base.OnLoad(e);
 
-        _scale = DeviceDpi / 96f;
+        // 按当前 DPI 给出合适的初始尺寸，但不限制之后的手动缩放。
+        float dpiScale = DeviceDpi / 96f;
+        Rectangle working = Screen.FromControl(this).WorkingArea;
+
+        int width = Math.Min((int)Math.Round(DesignWidth * dpiScale), working.Width - 80);
+        int height = Math.Min((int)Math.Round(DesignHeight * dpiScale), working.Height - 80);
+
         ClientSize = new Size(
-            (int)Math.Round(DesignWidth * _scale),
-            (int)Math.Round(DesignHeight * _scale));
+            Math.Max(width, MinimumSize.Width),
+            Math.Max(height, MinimumSize.Height));
         CenterToScreen();
     }
 
@@ -112,8 +121,34 @@ public sealed class MainForm : Form
 
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
-        _highScoreStore.Submit(_game.Score);
+        SubmitScore();
         base.OnFormClosing(e);
+    }
+
+    /// <summary>提交本局分数；落盘失败时在底部给出可见提示，而不是静默丢失。</summary>
+    private void SubmitScore()
+    {
+        if (!_highScoreStore.Submit(_game.Score))
+        {
+            return;
+        }
+
+        switch (_highScoreStore.LastOutcome)
+        {
+            case SaveOutcome.AccessDenied:
+                ShowNotice("本次成绩未保存（目录不可写）");
+                break;
+
+            case SaveOutcome.IoError:
+                ShowNotice("本次成绩未保存（磁盘写入失败）");
+                break;
+        }
+    }
+
+    private void ShowNotice(string message)
+    {
+        _notice = message;
+        _noticeUntil = _clock.ElapsedMilliseconds + 6000;
     }
 
     protected override void OnKeyDown(KeyEventArgs e)
@@ -215,7 +250,14 @@ public sealed class MainForm : Form
             }
         }
 
-        _highScoreStore.Submit(_game.Score);
+        // 只在结束一局时写入，避免每帧重复落盘。
+        if (_game.State == GameState.GameOver && _lastState != GameState.GameOver)
+        {
+            SubmitScore();
+        }
+
+        _lastState = _game.State;
+
         Invalidate();
     }
 
@@ -227,13 +269,28 @@ public sealed class MainForm : Form
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.PixelOffsetMode = PixelOffsetMode.HighQuality;
         g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
-        g.ScaleTransform(_scale, _scale);
+
+        // 画面按客户区等比缩放并居中：窗口任意拉伸都不会溢出或错位。
+        float scale = Math.Min(
+            Math.Max(ClientSize.Width, 1) / (float)DesignWidth,
+            Math.Max(ClientSize.Height, 1) / (float)DesignHeight);
+        scale = Math.Max(scale, 0.25f);
+
+        float offsetX = (ClientSize.Width - DesignWidth * scale) / 2f;
+        float offsetY = (ClientSize.Height - DesignHeight * scale) / 2f;
+
+        GraphicsState view = g.Save();
+        g.TranslateTransform(offsetX, offsetY);
+        g.ScaleTransform(scale, scale);
+        g.SetClip(new RectangleF(0f, 0f, DesignWidth, DesignHeight));
 
         DrawBackground(g);
         DrawHeader(g);
         DrawBoard(g);
         DrawSidePanel(g);
         DrawFooter(g);
+
+        g.Restore(view);
     }
 
     private void DrawBackground(Graphics g)
@@ -527,7 +584,15 @@ public sealed class MainForm : Form
 
     private void DrawFooter(Graphics g)
     {
-        g.DrawString("计分规则   100 × 消除行数", _labelFont, MutedBrush, 28f, 622f);
+        if (_notice is not null && _clock.ElapsedMilliseconds < _noticeUntil)
+        {
+            using var noticeBrush = new SolidBrush(Color.FromArgb(251, 191, 36));
+            g.DrawString(_notice, _labelFont, noticeBrush, 28f, 622f);
+        }
+        else
+        {
+            g.DrawString("计分规则   100 × 消除行数", _labelFont, MutedBrush, 28f, 622f);
+        }
 
         using var rightAligned = new StringFormat { Alignment = StringAlignment.Far };
         g.DrawString(
