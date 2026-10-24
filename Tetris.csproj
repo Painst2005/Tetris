@@ -11,4 +11,10 @@
     <ApplicationHighDpiMode>SystemAware</ApplicationHighDpiMode>
   </PropertyGroup>
 
+  <ItemGroup>
+    <Compile Remove="Tetris.Core\**\*.cs" />
+    <Compile Remove="Tetris.Tests\**\*.cs" />
+    <ProjectReference Include="Tetris.Core\Tetris.Core.csproj" />
+  </ItemGroup>
+
 </Project>

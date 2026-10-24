@@ -78,6 +78,22 @@ public sealed class Tetromino
         });
     }
 
+    public Tetromino Clone()
+    {
+        int size = Size;
+        int[,] cells = new int[size, size];
+
+        for (int row = 0; row < size; row++)
+        {
+            for (int col = 0; col < size; col++)
+            {
+                cells[row, col] = Cells[row, col];
+            }
+        }
+
+        return new Tetromino(Type, cells);
+    }
+
     public Tetromino RotateClockwise()
     {
         if (Type == TetrominoType.O)

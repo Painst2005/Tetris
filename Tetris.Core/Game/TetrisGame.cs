@@ -32,6 +32,34 @@ public sealed class TetrisGame
         Reset();
     }
 
+    public TetrisGame(GameSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        RestoreSnapshot(snapshot);
+    }
+
+    /// <summary>捕获当前状态，生成的快照与游戏实例互不共享数据。</summary>
+    public GameSnapshot CaptureSnapshot()
+    {
+        return new GameSnapshot(
+            _board,
+            Current,
+            CurrentX,
+            CurrentY,
+            _queue,
+            Score,
+            Level,
+            Lines,
+            State,
+            _gravityElapsed);
+    }
+
+    /// <summary>创建当前游戏状态的深拷贝，可独立继续运行。</summary>
+    public TetrisGame Clone()
+    {
+        return new TetrisGame(CaptureSnapshot());
+    }
+
     public GameState State { get; private set; }
 
     public int Score { get; private set; }
@@ -336,10 +364,38 @@ public sealed class TetrisGame
         return true;
     }
 
+    private void RestoreSnapshot(GameSnapshot snapshot)
+    {
+        Array.Clear(_board);
+
+        for (int row = 0; row < Rows; row++)
+        {
+            for (int column = 0; column < Columns; column++)
+            {
+                _board[row, column] = snapshot.Board[row, column];
+            }
+        }
+
+        _queue.Clear();
+
+        foreach (TetrominoType type in snapshot.Upcoming)
+        {
+            _queue.Enqueue(type);
+        }
+
+        Current = snapshot.Current.Clone();
+        CurrentX = snapshot.CurrentX;
+        CurrentY = snapshot.CurrentY;
+        Score = snapshot.Score;
+        Level = snapshot.Level;
+        Lines = snapshot.Lines;
+        State = snapshot.State;
+        _gravityElapsed = snapshot.GravityElapsed;
+    }
+
     private void SpawnPiece()
     {
         EnsureQueue();
-
         Current = Tetromino.Create(_queue.Dequeue());
         CurrentX = (Columns - Current.Size) / 2;
         CurrentY = 0;
