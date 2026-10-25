@@ -1,0 +1,31 @@
+name: build
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    # WinForms 项目目标框架是 net10.0-windows，必须在 Windows 上构建
+    runs-on: windows-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: 还原依赖
+        run: dotnet restore Tetris.sln
+
+      - name: 编译（Release）
+        run: dotnet build Tetris.sln -c Release --no-restore
+
+      - name: 运行单元测试
+        run: dotnet test Tetris.Tests/Tetris.Tests.csproj -c Release --no-build
