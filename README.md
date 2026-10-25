@@ -31,7 +31,7 @@ dotnet run --project Tetris.csproj -c Release
 
 ## 单元测试
 
-当前共 **19 个**测试：13 个覆盖棋盘碰撞、旋转、消行、计分、状态克隆，6 个覆盖存档往返、损坏隔离与文件占用降级。
+当前共 **21 个**测试：13 个覆盖棋盘碰撞、旋转、消行、计分、状态克隆，8 个覆盖存档往返、损坏隔离、文件占用降级与格式版本兼容。
 
 ```bash
 dotnet test Tetris.Tests/Tetris.Tests.csproj
@@ -75,16 +75,19 @@ dotnet publish Tetris.csproj -c Release -r win-x64 --self-contained false -o pub
 Tetris.sln
 ├─ Tetris.csproj              WinForms 宿主（渲染与输入）
 ├─ UI/MainForm.cs             界面绘制、按键、计时驱动
-├─ Persistence/               最高分持久化（XML）
-└─ Tetris.Core/               纯逻辑，net10.0，不引用任何 UI
-   └─ Game/
-      ├─ TetrisGame.cs        棋盘、移动、旋转、消行、计分
-      ├─ Tetromino.cs         方块形状与旋转
-      └─ GameSnapshot.cs      与界面无关的完整状态快照
-└─ Tetris.Tests/              xUnit 单元测试
+├─ Tetris.Core/               纯逻辑，net10.0，不引用任何 UI
+│  ├─ Game/
+│  │  ├─ TetrisGame.cs        棋盘、移动、旋转、消行、计分
+│  │  ├─ Tetromino.cs         方块形状与旋转
+│  │  └─ GameSnapshot.cs      与界面无关的完整状态快照
+│  └─ Persistence/
+│     ├─ IHighScoreStore.cs   最高分存储抽象
+│     └─ HighScoreStore.cs    XML 读写、原子替换、损坏隔离
+├─ Tetris.Tests/              xUnit 单元测试（21 个）
+└─ publish/                   win-x64 发布产物
 ```
 
-`Tetris.Core` 目标框架为 `net10.0`（非 `net10.0-windows`），因此可以在任何平台引用与测试，这一点是「逻辑与渲染分离」的直接证据。
+`Tetris.Core` 目标框架为 `net10.0`（非 `net10.0-windows`），因此可以在任何平台引用与测试，这一点是「逻辑与渲染分离」的直接证据；持久化层也在 Core 内，所以单元测试能直接覆盖存档逻辑。
 
 ## 异常处理说明
 
@@ -96,3 +99,25 @@ Tetris.sln
 | 目录只读 / 无权限 | 成绩保留在内存中，界面底部提示「本次成绩未保存」 |
 | 窗口缩放 | 画面按客户区等比缩放并居中，最小尺寸受限，不会溢出或错位 |
 | 快速连按 / 同时按键 | 按键集合去重，长按走重复计时器，不会重复触发或漏键 |
+
+## 存档格式
+
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<HighScore Version="1">
+  <Score>4200</Score>
+</HighScore>
+```
+
+`Version` 属性用于格式演进：读取时缺失该属性视为旧版本（`0`），仍按 `<Score>` 解析，不会误判为损坏文件。
+
+## 已知限制
+
+| 限制 | 说明 |
+|---|---|
+| 无锁定延迟 | 方块触底后立即锁定，没有常见的 lock delay（约 0.5 s）缓冲 |
+| 旋转踢墙为简化表 | 仅尝试水平 ±2 与上移一格，不是完整的 SRS 踢墙表 |
+| 分数显示宽度 | 界面固定显示 4 位十六进制；超过 `0xFFFF` 时仍能显示，只是对齐会变化 |
+| 未实现的可选功能 | 双人同屏 / AI 自动玩家 / 录制回放 / SQLite 排行榜均未实现 |
+| 发布形式 | `publish/` 为框架依赖版本，目标机器需安装 .NET 10 Desktop Runtime；如需免安装，用 `--self-contained true` 重新发布 |
+
