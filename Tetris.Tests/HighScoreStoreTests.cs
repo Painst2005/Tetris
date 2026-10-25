@@ -1,3 +1,4 @@
+using System.Xml.Linq;
 using Tetris.Persistence;
 
 namespace Tetris.Tests;
@@ -50,6 +51,33 @@ public sealed class HighScoreStoreTests : IDisposable
         var reloaded = new HighScoreStore(ScorePath);
 
         Assert.Equal(4200, reloaded.HighScore);
+    }
+
+    [Fact]
+    public void SavedFile_CarriesCurrentFormatVersion()
+    {
+        var store = new HighScoreStore(ScorePath);
+        store.Submit(100);
+
+        XDocument document = XDocument.Load(ScorePath);
+        string? version = document.Root?.Attribute("Version")?.Value;
+
+        Assert.Equal(HighScoreStore.CurrentFormatVersion.ToString(), version);
+    }
+
+    [Fact]
+    public void LegacyFileWithoutVersion_IsStillReadable()
+    {
+        // 上一版程序写出的文件没有 Version 属性，升级后必须还能读。
+        File.WriteAllText(
+            ScorePath,
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?><HighScore><Score>777</Score></HighScore>");
+
+        var store = new HighScoreStore(ScorePath);
+
+        Assert.Equal(777, store.HighScore);
+        Assert.Equal(0, store.FormatVersion);
+        Assert.True(File.Exists(ScorePath), "旧格式文件不应被当成损坏文件隔离");
     }
 
     [Fact]

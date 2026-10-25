@@ -10,6 +10,9 @@ namespace Tetris.Persistence;
 /// </summary>
 public sealed class HighScoreStore : IHighScoreStore
 {
+    /// <summary>当前落盘格式版本。新增字段时递增，旧版本文件仍可读取。</summary>
+    public const int CurrentFormatVersion = 1;
+
     private const int MaxRetries = 3;
     private const int RetryDelayMs = 50;
 
@@ -26,6 +29,9 @@ public sealed class HighScoreStore : IHighScoreStore
     }
 
     public int HighScore { get; private set; }
+
+    /// <summary>磁盘文件使用的格式版本；0 表示旧版文件（没有 Version 属性）。</summary>
+    public int FormatVersion { get; private set; }
 
     public SaveOutcome LastOutcome { get; private set; } = SaveOutcome.Unchanged;
 
@@ -76,6 +82,8 @@ public sealed class HighScoreStore : IHighScoreStore
                     document = XDocument.Load(stream);
                 }
 
+                FormatVersion = ReadFormatVersion(document);
+
                 string? raw = document.Root?.Element("Score")?.Value ?? document.Root?.Value;
 
                 if (int.TryParse(raw?.Trim(), out int score) && score >= 0)
@@ -114,6 +122,13 @@ public sealed class HighScoreStore : IHighScoreStore
         HighScore = 0;
     }
 
+    /// <summary>读取文件头部的格式版本；旧文件没有该属性时视为 0。</summary>
+    private static int ReadFormatVersion(XDocument document)
+    {
+        string? text = document.Root?.Attribute("Version")?.Value;
+        return int.TryParse(text, out int version) && version >= 0 ? version : 0;
+    }
+
     private bool FileExistsSafe()
     {
         try
@@ -143,6 +158,7 @@ public sealed class HighScoreStore : IHighScoreStore
 
                 var document = new XDocument(
                     new XElement("HighScore",
+                        new XAttribute("Version", CurrentFormatVersion),
                         new XElement("Score", HighScore)));
 
                 File.WriteAllText(tempPath, document.ToString());
