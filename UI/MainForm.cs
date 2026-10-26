@@ -61,6 +61,7 @@ public sealed class MainForm : Form
     private long _startedAt = -1;
     private int _lastScore;
     private int _lastLevel = 1;
+    private int _scoreDelta;
     private long _scorePopAt = -1;
     private long _levelUpAt = -1;
 
@@ -344,6 +345,7 @@ public sealed class MainForm : Form
         {
             if (_game.Score > _lastScore)
             {
+                _scoreDelta = _game.Score - _lastScore;
                 _scorePopAt = now;
             }
 
@@ -473,6 +475,16 @@ public sealed class MainForm : Form
         GraphicsState state = g.Save();
         g.SetClip(boardPath, CombineMode.Intersect);
 
+        // 棋盘中心轻微提亮，让网格与背景融合得更自然。
+        using var centerGlow = new SolidBrush(Color.FromArgb(7, 148, 197, 255));
+        g.FillEllipse(
+            centerGlow,
+            new RectangleF(
+                BoardRect.X + 48f,
+                BoardRect.Y + 128f,
+                BoardRect.Width - 96f,
+                BoardRect.Height - 256f));
+
         DrawGrid(g);
         DrawLockedBlocks(g);
         DrawLockFlashes(g);
@@ -482,7 +494,11 @@ public sealed class MainForm : Form
 
         g.Restore(state);
 
-        using var borderPen = new Pen(Color.FromArgb(45, 62, 96), 1.4f);
+        // 一圈极淡的青色外发光，呼应整体霓虹氛围。
+        using var outerGlowPen = new Pen(Color.FromArgb(13, 34, 211, 238), 3f);
+        g.DrawPath(outerGlowPen, boardPath);
+
+        using var borderPen = new Pen(Color.FromArgb(52, 62, 96), 1.4f);
         g.DrawPath(borderPen, boardPath);
 
         if (_game.State == GameState.Ready)
@@ -515,7 +531,7 @@ public sealed class MainForm : Form
 
     private static void DrawGrid(Graphics g)
     {
-        using var gridPen = new Pen(Color.FromArgb(22, 116, 140, 180), 1f);
+        using var gridPen = new Pen(Color.FromArgb(19, 148, 178, 210), 1f);
 
         for (int col = 1; col < TetrisGame.Columns; col++)
         {
@@ -701,7 +717,7 @@ public sealed class MainForm : Form
     {
         var card = new RectangleF(SideX, 88, 220, 148);
         DrawCard(g, card, Color.FromArgb(48, 34, 211, 238));
-        g.DrawString("下一个", _labelFont, LabelBrush, SideX + 16f, 100f);
+        DrawCardTitle(g, "下一个", SideX + 16f, 100f, Color.FromArgb(34, 211, 238));
 
         var preview = new RectangleF(SideX + 14, 122, 192, 104);
         using (var previewPath = RoundedRectangle(preview, 8))
@@ -745,7 +761,7 @@ public sealed class MainForm : Form
     {
         var card = new RectangleF(SideX, 252, 220, 76);
         DrawCard(g, card, Color.FromArgb(46, 34, 211, 238));
-        g.DrawString("分数 · 十六进制", _labelFont, LabelBrush, SideX + 16f, 264f);
+        DrawCardTitle(g, "分数 · 十六进制", SideX + 16f, 264f, Color.FromArgb(103, 232, 249));
 
         using var rightAligned = new StringFormat { Alignment = StringAlignment.Far };
         g.DrawString(
@@ -786,6 +802,24 @@ public sealed class MainForm : Form
         {
             g.DrawString(scoreText, _scoreFont, ScoreBrush, SideX + 14f, 282f);
         }
+
+        // 分数增量飘字：金色 +0xXX 在分数右上方浮起并淡出。
+        if (_scorePopAt >= 0 && _scoreDelta > 0)
+        {
+            float rise = (_clock.ElapsedMilliseconds - _scorePopAt) / 620f;
+
+            if (rise < 1f)
+            {
+                using var deltaBrush = new SolidBrush(
+                    Color.FromArgb(ScaleAlpha(235, 1f - rise), 251, 191, 36));
+                g.DrawString(
+                    $"+0x{_scoreDelta:X}",
+                    _recordFont,
+                    deltaBrush,
+                    SideX + 148f,
+                    296f - 14f * rise);
+            }
+        }
     }
 
     private void DrawLevelAndLinesCards(Graphics g)
@@ -793,8 +827,8 @@ public sealed class MainForm : Form
         var levelCard = new RectangleF(SideX, 340, 104, 76);
         var linesCard = new RectangleF(SideX + 116, 340, 104, 76);
 
-        DrawCard(g, levelCard);
-        DrawCard(g, linesCard);
+        DrawCard(g, levelCard, Color.FromArgb(44, 167, 139, 250));
+        DrawCard(g, linesCard, Color.FromArgb(44, 52, 211, 153));
 
         // 升级瞬间给等级卡片一圈青色辉光。
         if (_levelUpAt >= 0)
@@ -813,18 +847,18 @@ public sealed class MainForm : Form
             }
         }
 
-        g.DrawString("等级", _labelFont, LabelBrush, levelCard.X + 14f, levelCard.Y + 12f);
+        DrawCardTitle(g, "等级", levelCard.X + 14f, levelCard.Y + 12f, Color.FromArgb(167, 139, 250));
         g.DrawString(_game.Level.ToString("D2"), _statFont, ValueBrush, levelCard.X + 12f, levelCard.Y + 30f);
 
-        g.DrawString("消行", _labelFont, LabelBrush, linesCard.X + 14f, linesCard.Y + 12f);
+        DrawCardTitle(g, "消行", linesCard.X + 14f, linesCard.Y + 12f, Color.FromArgb(52, 211, 153));
         g.DrawString(_game.Lines.ToString("D2"), _statFont, ValueBrush, linesCard.X + 12f, linesCard.Y + 30f);
     }
 
     private void DrawControlsCard(Graphics g)
     {
         var card = new RectangleF(SideX, 428, 220, 172);
-        DrawCard(g, card);
-        g.DrawString("操作", _labelFont, LabelBrush, SideX + 16f, 441f);
+        DrawCard(g, card, Color.FromArgb(44, 125, 211, 252));
+        DrawCardTitle(g, "操作", SideX + 16f, 441f, Color.FromArgb(125, 211, 252));
 
         (string Key, string Action)[] rows =
         {
@@ -848,6 +882,10 @@ public sealed class MainForm : Form
 
     private void DrawFooter(Graphics g)
     {
+        // 与页头呼应的分隔线，收拢底部区域。
+        using var dividerPen = new Pen(Color.FromArgb(28, 54, 82), 1f);
+        g.DrawLine(dividerPen, 28f, 612f, 664f, 612f);
+
         if (_notice is not null && _clock.ElapsedMilliseconds < _noticeUntil)
         {
             using var noticeBrush = new SolidBrush(Color.FromArgb(251, 191, 36));
@@ -994,6 +1032,20 @@ public sealed class MainForm : Form
 
         using var border = new Pen(accentBorder ?? Color.FromArgb(36, 48, 78), 1f);
         g.DrawPath(border, path);
+
+        // 顶部内侧高光线：给卡片一点轻微的立体感。
+        using var highlight = new Pen(Color.FromArgb(24, 255, 255, 255), 1f);
+        g.DrawLine(highlight, rect.X + 11f, rect.Y + 1.5f, rect.Right - 11f, rect.Y + 1.5f);
+    }
+
+    /// <summary>卡片标题：左侧一枚圆角色块作图标感标记，右侧跟标签文字。</summary>
+    private void DrawCardTitle(Graphics g, string text, float x, float y, Color accent)
+    {
+        using var markerPath = RoundedRectangle(new RectangleF(x, y + 3f, 4f, 13f), 2f);
+        using var markerBrush = new SolidBrush(accent);
+        g.FillPath(markerBrush, markerPath);
+
+        g.DrawString(text, _labelFont, LabelBrush, x + 11f, y);
     }
 
     private static void DrawBlock(Graphics g, RectangleF rect, Color color, float radius = 6f)
