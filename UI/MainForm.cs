@@ -155,6 +155,16 @@ public sealed class MainForm : Form
     {
         base.OnKeyDown(e);
 
+        // 准备界面：任意键开始游戏。
+        if (_game.State == GameState.Ready)
+        {
+            _game.Start();
+            e.Handled = true;
+            e.SuppressKeyPress = true;
+            Invalidate();
+            return;
+        }
+
         if (!_pressed.Add(e.KeyCode))
         {
             return;
@@ -198,6 +208,7 @@ public sealed class MainForm : Form
 
             case Keys.R:
                 _game.Reset();
+                _game.Start();
                 break;
 
             default:
@@ -358,7 +369,11 @@ public sealed class MainForm : Form
         using var borderPen = new Pen(Color.FromArgb(45, 62, 96), 1.4f);
         g.DrawPath(borderPen, boardPath);
 
-        if (_game.State == GameState.Paused)
+        if (_game.State == GameState.Ready)
+        {
+            DrawStartOverlay(g);
+        }
+        else if (_game.State == GameState.Paused)
         {
             DrawPauseOverlay(g);
         }
@@ -601,6 +616,55 @@ public sealed class MainForm : Form
             MutedBrush,
             new RectangleF(500, 622, 164, 18),
             rightAligned);
+    }
+
+    private void DrawStartOverlay(Graphics g)
+    {
+        using var overlayPath = RoundedRectangle(BoardRect, 12);
+        using var overlayBrush = new SolidBrush(Color.FromArgb(210, 5, 8, 18));
+        g.FillPath(overlayBrush, overlayPath);
+
+        // 顶部装饰光带
+        using var glowPath = RoundedRectangle(
+            new RectangleF(BoardRect.X + BoardRect.Width / 2f - 80f, BoardRect.Y + 70f, 160f, 4f),
+            2f);
+        using var glowBrush = new LinearGradientBrush(
+            new RectangleF(BoardRect.X + BoardRect.Width / 2f - 80f, BoardRect.Y + 70f, 160f, 4f),
+            Color.FromArgb(34, 211, 238),
+            Color.FromArgb(167, 139, 250),
+            0f);
+        g.FillPath(glowBrush, glowPath);
+
+        DrawCenteredText(g, "准备开始", _overlayTitleFont, ScoreBrush, BoardRect, 92f);
+        DrawCenteredText(g, "俄罗斯方块 · 12 × 16", _overlayBodyFont, DescBrush, BoardRect, 146f);
+
+        // 最高分展示
+        string highScore = $"最高纪录  0x{_highScoreStore.HighScore:X4}";
+        DrawCenteredText(g, highScore, _recordFont, RecordBrush, BoardRect, 186f);
+
+        // 操作提示
+        float startY = BoardRect.Y + 230f;
+        (string Key, string Action)[] hints =
+        {
+            ("← →", "左右移动"),
+            ("↑ / Z", "顺 / 逆旋转"),
+            ("↓", "软降"),
+            ("SPACE", "瞬间下落")
+        };
+
+        foreach ((string key, string action) in hints)
+        {
+            g.DrawString(key, _keyFont, KeyBrush, BoardRect.X + 86f, startY);
+            g.DrawString(action, _labelFont, DescBrush, BoardRect.X + 168f, startY);
+            startY += 26f;
+        }
+
+        // 闪烁的开始提示
+        long blink = _clock.ElapsedMilliseconds % 1200;
+        if (blink < 700)
+        {
+            DrawCenteredText(g, "按任意键开始", _overlayBodyFont, ValueBrush, BoardRect, 372f);
+        }
     }
 
     private void DrawPauseOverlay(Graphics g)

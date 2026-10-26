@@ -2,6 +2,7 @@ namespace Tetris.Game;
 
 public enum GameState
 {
+    Ready,
     Running,
     Paused,
     GameOver
@@ -115,10 +116,20 @@ public sealed class TetrisGame
         Lines = 0;
         Level = 1;
         _gravityElapsed = 0;
-        State = GameState.Running;
+        State = GameState.Ready;
 
         RefillQueue();
         SpawnPiece();
+    }
+
+    /// <summary>从准备界面开始游戏。</summary>
+    public void Start()
+    {
+        if (State == GameState.Ready)
+        {
+            State = GameState.Running;
+            _gravityElapsed = 0;
+        }
     }
 
     public void TogglePause()
