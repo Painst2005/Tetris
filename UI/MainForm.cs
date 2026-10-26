@@ -52,6 +52,18 @@ public sealed class MainForm : Form
     private string? _notice;
     private long _noticeUntil;
 
+    // 动画状态：锁定辉光、消行闪白、平滑下落、界面过渡与数值反馈。
+    private readonly List<LockFlash> _lockFlashes = new();
+    private readonly List<ClearFlash> _clearFlashes = new();
+    private Tetromino? _renderPiece;
+    private float _pieceRenderY;
+    private long _gameOverSince = -1;
+    private long _startedAt = -1;
+    private int _lastScore;
+    private int _lastLevel = 1;
+    private long _scorePopAt = -1;
+    private long _levelUpAt = -1;
+
     public MainForm()
     {
         Text = "Tetris · 俄罗斯方块";
@@ -70,6 +82,9 @@ public sealed class MainForm : Form
             ControlStyles.UserPaint |
             ControlStyles.ResizeRedraw,
             true);
+
+        _game.PieceLocked += OnPieceLocked;
+        _game.LinesCleared += OnLinesCleared;
 
         _timer = new System.Windows.Forms.Timer { Interval = 16 };
         _timer.Tick += OnGameTick;
@@ -149,6 +164,32 @@ public sealed class MainForm : Form
     {
         _notice = message;
         _noticeUntil = _clock.ElapsedMilliseconds + 6000;
+    }
+
+    private void OnPieceLocked(IReadOnlyList<(int X, int Y)> cells, TetrominoType type)
+    {
+        long now = _clock.ElapsedMilliseconds;
+        Color color = BlockColor(type);
+
+        foreach ((int x, int y) in cells)
+        {
+            _lockFlashes.Add(new LockFlash { X = x, Y = y, Color = color, Start = now });
+        }
+    }
+
+    private void OnLinesCleared(IReadOnlyList<ClearedRow> rows)
+    {
+        long now = _clock.ElapsedMilliseconds;
+        var clearedRows = new HashSet<int>();
+
+        foreach (ClearedRow row in rows)
+        {
+            clearedRows.Add(row.Row);
+            _clearFlashes.Add(new ClearFlash { Row = row.Row, Cells = row.Cells, Start = now });
+        }
+
+        // 被消除的行不再叠加锁定辉光，交给消行闪白表现。
+        _lockFlashes.RemoveAll(flash => clearedRows.Contains(flash.Y));
     }
 
     protected override void OnKeyDown(KeyEventArgs e)
@@ -267,9 +308,82 @@ public sealed class MainForm : Form
             SubmitScore();
         }
 
+        UpdateAnimations(now, elapsed);
+
         _lastState = _game.State;
 
         Invalidate();
+    }
+
+    /// <summary>推进所有视觉动画状态：平滑下落、分数弹跳、升级辉光与界面过渡时间戳。</summary>
+    private void UpdateAnimations(long now, int elapsed)
+    {
+        if (_game.State == GameState.GameOver && _lastState != GameState.GameOver)
+        {
+            _gameOverSince = now;
+        }
+        else if (_game.State != GameState.GameOver)
+        {
+            _gameOverSince = -1;
+        }
+
+        if (_game.State == GameState.Running &&
+            _lastState is GameState.Ready or GameState.GameOver)
+        {
+            _startedAt = now;
+        }
+
+        if (_game.State == GameState.Ready)
+        {
+            _lockFlashes.Clear();
+            _clearFlashes.Clear();
+            _startedAt = -1;
+        }
+
+        if (_game.Score != _lastScore)
+        {
+            if (_game.Score > _lastScore)
+            {
+                _scorePopAt = now;
+            }
+
+            _lastScore = _game.Score;
+        }
+
+        if (_game.Level != _lastLevel)
+        {
+            if (_game.Level > _lastLevel)
+            {
+                _levelUpAt = now;
+            }
+
+            _lastLevel = _game.Level;
+        }
+
+        // 当前方块纵向平滑跟随：普通下落时缓动，硬降 / 新方块 / 上踢直接吸附。
+        if (!ReferenceEquals(_renderPiece, _game.Current) || _game.State != GameState.Running)
+        {
+            _renderPiece = _game.Current;
+            _pieceRenderY = _game.CurrentY;
+        }
+        else
+        {
+            float diff = _game.CurrentY - _pieceRenderY;
+
+            if (diff is > 3f or < 0f)
+            {
+                _pieceRenderY = _game.CurrentY;
+            }
+            else
+            {
+                _pieceRenderY += diff * Math.Min(1f, elapsed / 80f);
+
+                if (Math.Abs(_game.CurrentY - _pieceRenderY) < 0.02f)
+                {
+                    _pieceRenderY = _game.CurrentY;
+                }
+            }
+        }
     }
 
     protected override void OnPaint(PaintEventArgs e)
@@ -361,6 +475,8 @@ public sealed class MainForm : Form
 
         DrawGrid(g);
         DrawLockedBlocks(g);
+        DrawLockFlashes(g);
+        DrawClearFlashes(g);
         DrawGhostPiece(g);
         DrawCurrentPiece(g);
 
@@ -380,6 +496,20 @@ public sealed class MainForm : Form
         else if (_game.State == GameState.GameOver)
         {
             DrawGameOverOverlay(g);
+        }
+        else if (_startedAt >= 0)
+        {
+            // 开始游戏后让准备界面短暂淡出，而不是瞬间消失。
+            float t = (_clock.ElapsedMilliseconds - _startedAt) / 260f;
+
+            if (t < 1f)
+            {
+                DrawStartOverlay(g, 1f - t);
+            }
+            else
+            {
+                _startedAt = -1;
+            }
         }
     }
 
@@ -414,6 +544,78 @@ public sealed class MainForm : Form
                 }
 
                 DrawBlock(g, CellRectangle(col, row), BlockColor(type.Value));
+            }
+        }
+    }
+
+    /// <summary>方块锁定瞬间的辉光：外扩一圈微光并快速衰减。</summary>
+    private void DrawLockFlashes(Graphics g)
+    {
+        if (_lockFlashes.Count == 0)
+        {
+            return;
+        }
+
+        long now = _clock.ElapsedMilliseconds;
+        const float duration = 200f;
+
+        for (int i = _lockFlashes.Count - 1; i >= 0; i--)
+        {
+            LockFlash flash = _lockFlashes[i];
+            float t = (now - flash.Start) / duration;
+
+            if (t >= 1f)
+            {
+                _lockFlashes.RemoveAt(i);
+                continue;
+            }
+
+            float fade = 1f - t;
+            RectangleF rect = CellRectangle(flash.X, flash.Y);
+            rect.Inflate(2f + 3f * fade, 2f + 3f * fade);
+
+            using var path = RoundedRectangle(rect, 7f);
+            using var glow = new SolidBrush(Color.FromArgb(ScaleAlpha(70, fade), flash.Color));
+            g.FillPath(glow, path);
+
+            using var pen = new Pen(
+                Color.FromArgb(ScaleAlpha(150, fade), ControlPaint.Light(flash.Color, 0.5f)),
+                1.4f);
+            g.DrawPath(pen, path);
+        }
+    }
+
+    /// <summary>消行动画：整行先闪白，再按原方块颜色渐隐。</summary>
+    private void DrawClearFlashes(Graphics g)
+    {
+        if (_clearFlashes.Count == 0)
+        {
+            return;
+        }
+
+        long now = _clock.ElapsedMilliseconds;
+        const float duration = 340f;
+
+        for (int i = _clearFlashes.Count - 1; i >= 0; i--)
+        {
+            ClearFlash flash = _clearFlashes[i];
+            float t = (now - flash.Start) / duration;
+
+            if (t >= 1f)
+            {
+                _clearFlashes.RemoveAt(i);
+                continue;
+            }
+
+            float fade = t < 0.35f ? 1f : 1f - (t - 0.35f) / 0.65f;
+            float whiten = Math.Max(0f, 1f - t / 0.35f);
+
+            for (int col = 0; col < TetrisGame.Columns; col++)
+            {
+                Color color = Mix(Color.White, BlockColor(flash.Cells[col]), 1f - whiten);
+                using var path = RoundedRectangle(CellRectangle(col, flash.Row), 6f);
+                using var brush = new SolidBrush(Color.FromArgb(ScaleAlpha(215, fade), color));
+                g.FillPath(brush, path);
             }
         }
     }
@@ -475,9 +677,9 @@ public sealed class MainForm : Form
                     continue;
                 }
 
-                int boardRow = _game.CurrentY + row;
+                float boardRow = _pieceRenderY + row;
 
-                if (boardRow < 0 || boardRow >= TetrisGame.Rows)
+                if (boardRow < 0f || boardRow >= TetrisGame.Rows)
                 {
                     continue;
                 }
@@ -553,7 +755,37 @@ public sealed class MainForm : Form
             new RectangleF(SideX + 14f, 264f, 192f, 16f),
             rightAligned);
 
-        g.DrawString($"0x{_game.Score:X4}", _scoreFont, ScoreBrush, SideX + 14f, 282f);
+        // 得分增长时数字轻微弹跳。
+        float popScale = 1f;
+
+        if (_scorePopAt >= 0)
+        {
+            float pop = (_clock.ElapsedMilliseconds - _scorePopAt) / 220f;
+
+            if (pop >= 1f)
+            {
+                _scorePopAt = -1;
+            }
+            else
+            {
+                popScale = 1f + 0.22f * (1f - pop) * (1f - pop);
+            }
+        }
+
+        string scoreText = $"0x{_game.Score:X4}";
+
+        if (popScale > 1.001f)
+        {
+            GraphicsState state = g.Save();
+            g.TranslateTransform(SideX + 14f, 282f);
+            g.ScaleTransform(popScale, popScale);
+            g.DrawString(scoreText, _scoreFont, ScoreBrush, 0f, 0f);
+            g.Restore(state);
+        }
+        else
+        {
+            g.DrawString(scoreText, _scoreFont, ScoreBrush, SideX + 14f, 282f);
+        }
     }
 
     private void DrawLevelAndLinesCards(Graphics g)
@@ -563,6 +795,23 @@ public sealed class MainForm : Form
 
         DrawCard(g, levelCard);
         DrawCard(g, linesCard);
+
+        // 升级瞬间给等级卡片一圈青色辉光。
+        if (_levelUpAt >= 0)
+        {
+            float glow = (_clock.ElapsedMilliseconds - _levelUpAt) / 650f;
+
+            if (glow >= 1f)
+            {
+                _levelUpAt = -1;
+            }
+            else
+            {
+                using var glowPath = RoundedRectangle(levelCard, 10);
+                using var glowPen = new Pen(Color.FromArgb(ScaleAlpha(190, 1f - glow), 34, 211, 238), 2f);
+                g.DrawPath(glowPen, glowPath);
+            }
+        }
 
         g.DrawString("等级", _labelFont, LabelBrush, levelCard.X + 14f, levelCard.Y + 12f);
         g.DrawString(_game.Level.ToString("D2"), _statFont, ValueBrush, levelCard.X + 12f, levelCard.Y + 30f);
@@ -618,29 +867,34 @@ public sealed class MainForm : Form
             rightAligned);
     }
 
-    private void DrawStartOverlay(Graphics g)
+    private void DrawStartOverlay(Graphics g, float alphaScale = 1f)
     {
+        using var scoreBrush = Scaled(ScoreBrush, alphaScale);
+        using var valueBrush = Scaled(ValueBrush, alphaScale);
+        using var descBrush = Scaled(DescBrush, alphaScale);
+        using var keyBrush = Scaled(KeyBrush, alphaScale);
+        using var recordBrush = Scaled(RecordBrush, alphaScale);
+
         using var overlayPath = RoundedRectangle(BoardRect, 12);
-        using var overlayBrush = new SolidBrush(Color.FromArgb(210, 5, 8, 18));
+        using var overlayBrush = new SolidBrush(Color.FromArgb(ScaleAlpha(210, alphaScale), 5, 8, 18));
         g.FillPath(overlayBrush, overlayPath);
 
         // 顶部装饰光带
-        using var glowPath = RoundedRectangle(
-            new RectangleF(BoardRect.X + BoardRect.Width / 2f - 80f, BoardRect.Y + 70f, 160f, 4f),
-            2f);
+        var glowRect = new RectangleF(BoardRect.X + BoardRect.Width / 2f - 80f, BoardRect.Y + 70f, 160f, 4f);
+        using var glowPath = RoundedRectangle(glowRect, 2f);
         using var glowBrush = new LinearGradientBrush(
-            new RectangleF(BoardRect.X + BoardRect.Width / 2f - 80f, BoardRect.Y + 70f, 160f, 4f),
-            Color.FromArgb(34, 211, 238),
-            Color.FromArgb(167, 139, 250),
+            glowRect,
+            Color.FromArgb(ScaleAlpha(255, alphaScale), 34, 211, 238),
+            Color.FromArgb(ScaleAlpha(255, alphaScale), 167, 139, 250),
             0f);
         g.FillPath(glowBrush, glowPath);
 
-        DrawCenteredText(g, "准备开始", _overlayTitleFont, ScoreBrush, BoardRect, 92f);
-        DrawCenteredText(g, "俄罗斯方块 · 12 × 16", _overlayBodyFont, DescBrush, BoardRect, 146f);
+        DrawCenteredText(g, "准备开始", _overlayTitleFont, scoreBrush, BoardRect, 92f);
+        DrawCenteredText(g, "俄罗斯方块 · 12 × 16", _overlayBodyFont, descBrush, BoardRect, 146f);
 
         // 最高分展示
         string highScore = $"最高纪录  0x{_highScoreStore.HighScore:X4}";
-        DrawCenteredText(g, highScore, _recordFont, RecordBrush, BoardRect, 186f);
+        DrawCenteredText(g, highScore, _recordFont, recordBrush, BoardRect, 186f);
 
         // 操作提示
         float startY = BoardRect.Y + 230f;
@@ -654,8 +908,8 @@ public sealed class MainForm : Form
 
         foreach ((string key, string action) in hints)
         {
-            g.DrawString(key, _keyFont, KeyBrush, BoardRect.X + 86f, startY);
-            g.DrawString(action, _labelFont, DescBrush, BoardRect.X + 168f, startY);
+            g.DrawString(key, _keyFont, keyBrush, BoardRect.X + 86f, startY);
+            g.DrawString(action, _labelFont, descBrush, BoardRect.X + 168f, startY);
             startY += 26f;
         }
 
@@ -663,7 +917,7 @@ public sealed class MainForm : Form
         long blink = _clock.ElapsedMilliseconds % 1200;
         if (blink < 700)
         {
-            DrawCenteredText(g, "按任意键开始", _overlayBodyFont, ValueBrush, BoardRect, 372f);
+            DrawCenteredText(g, "按任意键开始", _overlayBodyFont, valueBrush, BoardRect, 372f);
         }
     }
 
@@ -679,24 +933,36 @@ public sealed class MainForm : Form
 
     private void DrawGameOverOverlay(Graphics g)
     {
+        // 结束界面淡入，标题与分数轻微下落，避免生硬弹出。
+        float t = _gameOverSince < 0
+            ? 1f
+            : Math.Min(1f, (_clock.ElapsedMilliseconds - _gameOverSince) / 480f);
+        float ease = 1f - (1f - t) * (1f - t);
+        float slide = (1f - ease) * -12f;
+
         using var overlayPath = RoundedRectangle(BoardRect, 12);
-        using var overlayBrush = new SolidBrush(Color.FromArgb(226, 4, 7, 14));
+        using var overlayBrush = new SolidBrush(Color.FromArgb(ScaleAlpha(226, ease), 4, 7, 14));
         g.FillPath(overlayBrush, overlayPath);
 
-        using var accentPen = new Pen(Color.FromArgb(180, 248, 113, 113), 2f);
+        using var accentPen = new Pen(Color.FromArgb(ScaleAlpha(180, ease), 248, 113, 113), 2f);
         float centerX = BoardRect.X + BoardRect.Width / 2f;
-        g.DrawLine(accentPen, centerX - 24f, BoardRect.Y + 142f, centerX + 24f, BoardRect.Y + 142f);
+        float accentY = BoardRect.Y + 142f + slide;
+        g.DrawLine(accentPen, centerX - 24f, accentY, centerX + 24f, accentY);
 
-        using var dangerBrush = new SolidBrush(Color.FromArgb(248, 113, 113));
-        DrawCenteredText(g, "游戏结束", _overlayTitleFont, dangerBrush, BoardRect, 166f);
+        using var dangerBrush = new SolidBrush(Color.FromArgb(ScaleAlpha(255, ease), 248, 113, 113));
+        DrawCenteredText(g, "游戏结束", _overlayTitleFont, dangerBrush, BoardRect, 166f + slide);
+
+        using var valueBrush = Scaled(ValueBrush, ease);
         DrawCenteredText(
             g,
             $"分数 0x{_game.Score:X4}  ·  {_game.Lines} 行",
             _overlayBodyFont,
-            ValueBrush,
+            valueBrush,
             BoardRect,
-            220f);
-        DrawCenteredText(g, "按 R 重新开始", _overlayBodyFont, DescBrush, BoardRect, 258f);
+            220f + slide * 0.5f);
+
+        using var descBrush = Scaled(DescBrush, ease);
+        DrawCenteredText(g, "按 R 重新开始", _overlayBodyFont, descBrush, BoardRect, 258f);
     }
 
     private static void DrawCenteredText(
@@ -770,7 +1036,7 @@ public sealed class MainForm : Form
         g.DrawPath(pen, path);
     }
 
-    private static RectangleF CellRectangle(int col, int row)
+    private static RectangleF CellRectangle(int col, float row)
     {
         return new RectangleF(
             BoardX + col * CellSize + 2.5f,
@@ -826,6 +1092,39 @@ public sealed class MainForm : Form
     private static Font PixelFont(string family, float pixelSize, FontStyle style = FontStyle.Regular)
     {
         return new Font(family, pixelSize, style, GraphicsUnit.Pixel);
+    }
+
+    private static int ScaleAlpha(int alpha, float scale)
+    {
+        return (int)Math.Clamp(alpha * scale, 0f, 255f);
+    }
+
+    private static SolidBrush Scaled(SolidBrush brush, float scale)
+    {
+        return new SolidBrush(Color.FromArgb(ScaleAlpha(brush.Color.A, scale), brush.Color));
+    }
+
+    private static Color Mix(Color from, Color to, float t)
+    {
+        int r = (int)(from.R + (to.R - from.R) * t);
+        int g = (int)(from.G + (to.G - from.G) * t);
+        int b = (int)(from.B + (to.B - from.B) * t);
+        return Color.FromArgb(r, g, b);
+    }
+
+    private sealed class LockFlash
+    {
+        public required int X { get; init; }
+        public required int Y { get; init; }
+        public required Color Color { get; init; }
+        public required long Start { get; init; }
+    }
+
+    private sealed class ClearFlash
+    {
+        public required int Row { get; init; }
+        public required TetrominoType[] Cells { get; init; }
+        public required long Start { get; init; }
     }
 
     private static GraphicsPath RoundedRectangle(RectangleF rect, float radius)

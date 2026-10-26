@@ -8,6 +8,9 @@ public enum GameState
     GameOver
 }
 
+/// <summary>一次消行中被移除的一行：行号与移除前该行各列的方块类型，供 UI 播放消行动画。</summary>
+public sealed record ClearedRow(int Row, TetrominoType[] Cells);
+
 /// <summary>
 /// 俄罗斯方块核心逻辑：棋盘、方块生成、移动、旋转、消行、计分与等级。
 /// </summary>
@@ -106,6 +109,12 @@ public sealed class TetrisGame
     {
         return _board[row, column];
     }
+
+    /// <summary>方块锁定到棋盘后触发，参数为锁定格子的坐标与方块类型，供 UI 播放锁定反馈。</summary>
+    public event Action<IReadOnlyList<(int X, int Y)>, TetrominoType>? PieceLocked;
+
+    /// <summary>发生消行时触发，参数为被移除的行（移除前的状态），供 UI 播放消行动画。</summary>
+    public event Action<IReadOnlyList<ClearedRow>>? LinesCleared;
 
     public void Reset()
     {
@@ -299,6 +308,7 @@ public sealed class TetrisGame
     private void LockPiece()
     {
         int size = Current.Size;
+        var lockedCells = new List<(int X, int Y)>(size);
 
         for (int row = 0; row < size; row++)
         {
@@ -315,8 +325,30 @@ public sealed class TetrisGame
                 if (y >= 0 && y < Rows && x >= 0 && x < Columns)
                 {
                     _board[y, x] = Current.Type;
+                    lockedCells.Add((x, y));
                 }
             }
+        }
+
+        // 消行前先把满行的内容记录下来，UI 需要它播放闪白渐隐动画。
+        List<ClearedRow>? clearedRows = null;
+
+        for (int row = 0; row < Rows; row++)
+        {
+            if (!IsRowFull(row))
+            {
+                continue;
+            }
+
+            clearedRows ??= new List<ClearedRow>();
+            var cells = new TetrominoType[Columns];
+
+            for (int col = 0; col < Columns; col++)
+            {
+                cells[col] = _board[row, col]!.Value;
+            }
+
+            clearedRows.Add(new ClearedRow(row, cells));
         }
 
         int cleared = ClearFullLines();
@@ -328,7 +360,15 @@ public sealed class TetrisGame
             Level = 1 + Lines / 10;
         }
 
+        TetrominoType lockedType = Current.Type;
         SpawnPiece();
+
+        PieceLocked?.Invoke(lockedCells, lockedType);
+
+        if (clearedRows is not null)
+        {
+            LinesCleared?.Invoke(clearedRows);
+        }
     }
 
     private int ClearFullLines()
