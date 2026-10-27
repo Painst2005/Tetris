@@ -9,7 +9,7 @@ namespace Tetris.UI;
 public sealed class MainForm : Form
 {
     private const int DesignWidth = 700;
-    private const int DesignHeight = 660;
+    private const int DesignHeight = 700;
     private const int CellSize = 32;
     private const int BoardX = 28;
     private const int BoardY = 88;
@@ -30,9 +30,13 @@ public sealed class MainForm : Form
 
     private readonly TetrisGame _game = new();
     private readonly IHighScoreStore _highScoreStore = new HighScoreStore();
+    private readonly IScoreRepository _scoreRepository = new SqliteScoreRepository();
     private readonly System.Windows.Forms.Timer _timer;
     private readonly Stopwatch _clock = Stopwatch.StartNew();
     private readonly HashSet<Keys> _pressed = new();
+
+    private ScoreboardResult? _topScores;
+    private long _scoresLoadedAt = -1;
 
     private readonly Font _titleFont = PixelFont("Segoe UI", 40f, FontStyle.Bold);
     private readonly Font _subtitleFont = PixelFont("Segoe UI", 12f);
@@ -91,6 +95,17 @@ public sealed class MainForm : Form
         _timer.Tick += OnGameTick;
         _lastTick = _clock.ElapsedMilliseconds;
         _timer.Start();
+
+        // 启动时预加载排行榜，失败不影响游戏。
+        try
+        {
+            _topScores = _scoreRepository.GetTopScores(10);
+            _scoresLoadedAt = 0;
+        }
+        catch (ScoreRepositoryException)
+        {
+            _topScores = new ScoreboardResult(ScoreboardStatus.IoError, Array.Empty<ScoreEntry>(), "排行榜不可用");
+        }
     }
 
     protected override void Dispose(bool disposing)
@@ -141,23 +156,164 @@ public sealed class MainForm : Form
         base.OnFormClosing(e);
     }
 
-    /// <summary>提交本局分数；落盘失败时在底部给出可见提示，而不是静默丢失。</summary>
-    private void SubmitScore()
+    protected override void OnMouseDown(MouseEventArgs e)
     {
-        if (!_highScoreStore.Submit(_game.Score))
+        base.OnMouseDown(e);
+
+        if (e.Button != MouseButtons.Left || _showHistoryButtonRect.IsEmpty) return;
+
+        // 设计坐标转物理坐标：逆用 OnPaint 里的 scale/offset。
+        float scale = Math.Min(
+            Math.Max(ClientSize.Width, 1) / (float)DesignWidth,
+            Math.Max(ClientSize.Height, 1) / (float)DesignHeight);
+        float offsetX = (ClientSize.Width - DesignWidth * scale) / 2f;
+        float offsetY = (ClientSize.Height - DesignHeight * scale) / 2f;
+
+        var point = new PointF(
+            (e.X - offsetX) / scale,
+            (e.Y - offsetY) / scale);
+
+        if (_showHistoryButtonRect.Contains(point))
         {
+            ShowHistoryDialog();
+        }
+    }
+
+    private void ShowHistoryDialog()
+    {
+        ScoreboardResult result;
+        try
+        {
+            result = _scoreRepository.GetAllScores();
+        }
+        catch (ScoreRepositoryException ex)
+        {
+            MessageBox.Show(
+                $"无法读取历史记录：{ex.Message}",
+                "排行榜",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
             return;
         }
+
+        using var dialog = new Form
+        {
+            Text = "历史全部成绩",
+            StartPosition = FormStartPosition.CenterParent,
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            MaximizeBox = false,
+            MinimizeBox = false,
+            BackColor = Color.FromArgb(5, 8, 16),
+            ForeColor = Color.White,
+            ClientSize = new Size(520, 420)
+        };
+
+        var title = new Label
+        {
+            Text = "全部历史成绩  ·  按分数降序",
+            ForeColor = Color.FromArgb(251, 191, 36),
+            Font = new Font("Segoe UI", 9f, FontStyle.Bold),
+            AutoSize = true,
+            Location = new Point(16, 16)
+        };
+        dialog.Controls.Add(title);
+
+        var closeBtn = new Button
+        {
+            Text = "关闭",
+            DialogResult = DialogResult.OK,
+            FlatStyle = FlatStyle.Flat,
+            BackColor = Color.FromArgb(28, 54, 82),
+            ForeColor = Color.White,
+            Location = new Point(430, 376),
+            Size = new Size(76, 28)
+        };
+        closeBtn.FlatAppearance.BorderColor = Color.FromArgb(71, 85, 105);
+        dialog.Controls.Add(closeBtn);
+        dialog.AcceptButton = closeBtn;
+
+        var list = new ListBox
+        {
+            Location = new Point(16, 48),
+            Size = new Size(488, 320),
+            Font = new Font("Consolas", 10f),
+            IntegralHeight = false,
+            BackColor = Color.FromArgb(10, 15, 28),
+            ForeColor = Color.White,
+            BorderStyle = BorderStyle.FixedSingle,
+            ScrollAlwaysVisible = true
+        };
+
+        string[] headers = { "#", "玩家", "分数", "消行", "等级", "时间" };
+        list.Items.Add(string.Format("{0,-3} {1,-14} {2,8} {3,6} {4,6}  {5}",
+            headers[0], headers[1], headers[2], headers[3], headers[4], headers[5]));
+
+        if (result.Status == ScoreboardStatus.Ok && result.Entries.Count > 0)
+        {
+            for (int i = 0; i < result.Entries.Count; i++)
+            {
+                ScoreEntry e = result.Entries[i];
+                string name = e.PlayerName.Length > 12
+                    ? e.PlayerName.AsSpan(0, 11).ToString() + "…"
+                    : e.PlayerName;
+                list.Items.Add(string.Format("{0,-3} {1,-14} {2,8} {3,6} {4,6}  {5}",
+                    i + 1,
+                    name,
+                    $"0x{e.Score:X4}",
+                    e.Lines,
+                    e.Level,
+                    e.AchievedAt.ToString("yyyy-MM-dd HH:mm")));
+            }
+        }
+        else if (result.Status == ScoreboardStatus.Empty)
+        {
+            list.Items.Add("（暂无记录）");
+        }
+        else
+        {
+            list.Items.Add($"（无法加载：{result.ErrorMessage}）");
+        }
+
+        dialog.Controls.Add(list);
+        dialog.ShowDialog(this);
+    }
+
+    /// <summary>提交本局分数；同时写入 XML 最高分和 SQLite 历史排行榜。</summary>
+    private void SubmitScore()
+    {
+        bool isNewRecord = _highScoreStore.Submit(_game.Score);
 
         switch (_highScoreStore.LastOutcome)
         {
             case SaveOutcome.AccessDenied:
-                ShowNotice("本次成绩未保存（目录不可写）");
+                ShowNotice("本次成绩未保存到本地（目录不可写）");
                 break;
 
             case SaveOutcome.IoError:
-                ShowNotice("本次成绩未保存（磁盘写入失败）");
+                ShowNotice("本次成绩未保存到本地（磁盘写入失败）");
                 break;
+        }
+
+        // 同时存入 SQLite 排行榜（仅当有实际成绩时，过滤掉刚启动就关的 0 分记录）。
+        if (_game.Score > 0 || _game.Lines > 0)
+        {
+            try
+            {
+                string playerName = Environment.UserName ?? "Player";
+                _scoreRepository.Add(new ScoreEntry(
+                    _game.Score,
+                    _game.Lines,
+                    _game.Level,
+                    playerName,
+                    DateTime.Now));
+
+                _topScores = _scoreRepository.GetTopScores(10);
+                _scoresLoadedAt = _clock.ElapsedMilliseconds;
+            }
+            catch (ScoreRepositoryException ex)
+            {
+                ShowNotice($"排行榜保存失败：{ex.Message}");
+            }
         }
     }
 
@@ -711,6 +867,7 @@ public sealed class MainForm : Form
         DrawScoreCard(g);
         DrawLevelAndLinesCards(g);
         DrawControlsCard(g);
+        DrawLeaderboardCard(g);
     }
 
     private void DrawNextCard(Graphics g)
@@ -880,11 +1037,73 @@ public sealed class MainForm : Form
         }
     }
 
+    private void DrawLeaderboardCard(Graphics g)
+    {
+        var card = new RectangleF(SideX, 604, 220, 88);
+        DrawCard(g, card, Color.FromArgb(44, 251, 191, 36));
+        DrawCardTitle(g, "排行榜", SideX + 16f, 616f, Color.FromArgb(251, 191, 36));
+
+        float y = 634f;
+
+        if (_topScores is null || _topScores.Status == ScoreboardStatus.IoError)
+        {
+            g.DrawString("排行榜不可用", _labelFont, MutedBrush, SideX + 16f, y);
+        }
+        else if (_topScores.Status == ScoreboardStatus.Empty)
+        {
+            g.DrawString("暂无记录", _labelFont, MutedBrush, SideX + 16f, y);
+        }
+        else if (_topScores.Status == ScoreboardStatus.Corrupted)
+        {
+            g.DrawString("数据库损坏", _labelFont, RecordBrush, SideX + 16f, y);
+        }
+        else
+        {
+            using var rightAligned = new StringFormat { Alignment = StringAlignment.Far };
+            int count = Math.Min(3, _topScores.Entries.Count);
+
+            for (int i = 0; i < count; i++)
+            {
+                ScoreEntry entry = _topScores.Entries[i];
+                string rank = (i + 1).ToString();
+                string name = entry.PlayerName.Length > 8
+                    ? entry.PlayerName.AsSpan(0, 7).ToString() + "…"
+                    : entry.PlayerName;
+                string score = $"0x{entry.Score:X4}";
+
+                Brush rankBrush = i switch
+                {
+                    0 => RecordBrush,
+                    1 => ValueBrush,
+                    2 => new SolidBrush(Color.FromArgb(234, 179, 8)),
+                    _ => MutedBrush
+                };
+
+                g.DrawString($"{rank}.", _keyFont, rankBrush, SideX + 16f, y);
+                g.DrawString(name, _labelFont, DescBrush, SideX + 40f, y);
+                g.DrawString(score, _keyFont, KeyBrush,
+                    new RectangleF(SideX + 140f, y - 2f, 64f, 18f),
+                    rightAligned);
+
+                y += 16f;
+            }
+        }
+
+        // "查看全部"按钮 — 标题行右侧，右对齐避开分数列，只缩小字号。
+        _showHistoryButtonRect = new RectangleF(SideX + 162f, 618f, 46f, 12f);
+        using var btnBrush = new SolidBrush(Color.FromArgb(251, 191, 36));
+        using var btnFont = new Font("Segoe UI", 5.5f, FontStyle.Bold);
+        using var btnFormat = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+        g.DrawString("查看全部", btnFont, btnBrush, _showHistoryButtonRect, btnFormat);
+    }
+
+    private RectangleF _showHistoryButtonRect;
+
     private void DrawFooter(Graphics g)
     {
-        // 与页头呼应的分隔线，收拢底部区域。
+        // 与页头呼应的分隔线，收拢底部区域（只覆盖棋盘列，右侧留给排行榜卡片）。
         using var dividerPen = new Pen(Color.FromArgb(28, 54, 82), 1f);
-        g.DrawLine(dividerPen, 28f, 612f, 664f, 612f);
+        g.DrawLine(dividerPen, 28f, 612f, 430f, 612f);
 
         if (_notice is not null && _clock.ElapsedMilliseconds < _noticeUntil)
         {
@@ -901,7 +1120,7 @@ public sealed class MainForm : Form
             "P 暂停  ·  R 重开",
             _labelFont,
             MutedBrush,
-            new RectangleF(500, 622, 164, 18),
+            new RectangleF(266, 622, 164, 18),
             rightAligned);
     }
 
