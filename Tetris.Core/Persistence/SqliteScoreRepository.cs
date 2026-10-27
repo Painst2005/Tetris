@@ -76,9 +76,16 @@ public sealed class SqliteScoreRepository : IScoreRepository
 
     private SqliteConnection CreateConnection()
     {
-        // 使用 WAL 模式改善并发，启用外键约束。
-        var conn = new SqliteConnection($"Data Source={_dbPath};Pooling=True;");
-        return conn;
+        // 设置较短的 busy timeout：数据库被其他进程占用时快速失败并进入重试，
+        // 避免界面线程被 SQLite 默认的长时间等待阻塞。
+        var builder = new SqliteConnectionStringBuilder
+        {
+            DataSource = _dbPath,
+            Pooling = true,
+            DefaultTimeout = 1
+        };
+
+        return new SqliteConnection(builder.ConnectionString);
     }
 
     private void Migrate()

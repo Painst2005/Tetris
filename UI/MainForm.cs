@@ -113,8 +113,9 @@ public sealed partial class MainForm : Form
             _topScores = _scoreRepository.GetTopScores(10);
             _scoresLoadedAt = 0;
         }
-        catch (ScoreRepositoryException)
+        catch (Exception)
         {
+            // 排行榜不可用时游戏仍必须能启动。
             _topScores = new ScoreboardResult(
                 ScoreboardStatus.IoError,
                 Array.Empty<ScoreEntry>(),
@@ -617,13 +618,20 @@ public sealed partial class MainForm : Form
 
     private void SubmitScore()
     {
-        _highScoreStore.Submit(_game.Score);
-
-        if (_highScoreStore.LastOutcome is SaveOutcome.AccessDenied or SaveOutcome.IoError)
+        try
         {
-            ShowNotice(_highScoreStore.LastOutcome == SaveOutcome.AccessDenied
-                ? "成绩未保存（目录不可写）"
-                : "成绩未保存（磁盘写入失败）");
+            _highScoreStore.Submit(_game.Score);
+
+            if (_highScoreStore.LastOutcome is SaveOutcome.AccessDenied or SaveOutcome.IoError)
+            {
+                ShowNotice(_highScoreStore.LastOutcome == SaveOutcome.AccessDenied
+                    ? "成绩未保存（目录不可写）"
+                    : "成绩未保存（磁盘写入失败）");
+            }
+        }
+        catch (Exception)
+        {
+            ShowNotice("最高分保存失败，游戏继续运行");
         }
 
         if (_game.Score <= 0 && _game.Lines <= 0)
@@ -644,7 +652,7 @@ public sealed partial class MainForm : Form
             _topScores = _scoreRepository.GetTopScores(10);
             _scoresLoadedAt = _clock.ElapsedMilliseconds;
         }
-        catch (ScoreRepositoryException ex)
+        catch (Exception ex)
         {
             ShowNotice($"排行榜保存失败：{ex.Message}");
         }
@@ -664,7 +672,7 @@ public sealed partial class MainForm : Form
         {
             result = _scoreRepository.GetAllScores();
         }
-        catch (ScoreRepositoryException ex)
+        catch (Exception ex)
         {
             MessageBox.Show(
                 $"无法读取历史记录：{ex.Message}",
